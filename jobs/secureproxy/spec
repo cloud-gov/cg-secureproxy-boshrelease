@@ -6,7 +6,6 @@ templates:
   bin/monit_debugger: bin/monit_debugger
   bin/secureproxy_ctl: bin/secureproxy_ctl
   config/nginx.conf.erb: config/nginx.conf
-  data/properties.sh.erb: data/properties.sh
   helpers/ctl_setup.sh: helpers/ctl_setup.sh
   helpers/ctl_utils.sh: helpers/ctl_utils.sh
   bin/drain: bin/drain

@@ -2,7 +2,7 @@
 user  vcap vcap;
 worker_processes  2;
 
-error_log /var/vcap/sys/log/secureproxy/nginx.error.log;
+error_log /var/vcap/sys/log/secureproxy/nginx.error.log notice;
 pid       /var/vcap/sys/run/secureproxy/secureproxy.pid;
 
 worker_rlimit_nofile 40000;
@@ -26,7 +26,7 @@ http {
   types_hash_max_size 2048;
   server_tokens off;
 
-  include /var/vcap/packages/secureproxy/conf/mime.types;
+  include /var/vcap/packages/secureproxy/nginx/conf/mime.types;
   default_type application/octet-stream;
   types {
     text/plain log;

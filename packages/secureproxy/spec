@@ -1,0 +1,5 @@
+---
+name: secureproxy
+files:
+- pcre-8*
+- openresty-1*

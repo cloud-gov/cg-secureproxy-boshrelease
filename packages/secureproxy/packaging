@@ -1,0 +1,17 @@
+set -e -x
+
+echo "Extracting pcre..."
+PCRE_TARGET=$(mktemp -d)
+tar xzvf pcre-8* -C ${PCRE_TARGET}
+
+echo "Extracting nginx..."
+OPENRESTY_TARGET=$(mktemp -d)
+tar xzvf openresty-1* -C ${OPENRESTY_TARGET}
+
+echo "Building nginx..."
+cd ${OPENRESTY_TARGET}/openresty*
+  ./configure \
+    --prefix=${BOSH_INSTALL_TARGET} \
+    --with-pcre=${PCRE_TARGET}/pcre*
+  make
+  make install
