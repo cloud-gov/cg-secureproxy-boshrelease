@@ -3,3 +3,4 @@ name: secureproxy
 files:
 - pcre-8*
 - openresty-1*
+- lua-resty-iputils/lib/resty/iputils.lua

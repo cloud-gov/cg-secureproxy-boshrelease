@@ -6,6 +6,8 @@ templates:
   bin/monit_debugger: bin/monit_debugger
   bin/secureproxy_ctl: bin/secureproxy_ctl
   config/nginx.conf.erb: config/nginx.conf
+  config/ip_whitelist.lua.erb: config/ip_whitelist.lua
+
   helpers/ctl_setup.sh: helpers/ctl_setup.sh
   helpers/ctl_utils.sh: helpers/ctl_utils.sh
   bin/drain: bin/drain
@@ -18,3 +20,13 @@ properties:
   secureproxy.custom_server_config:
     description: Custom nginx configuration to include in main http block
     default: ""
+  secureproxy.cloud_controller:
+    description: The hostname the cloud controller has registered as a route with the gorouter
+    default: api.bosh-lite.com
+  secureproxy.whitelist:
+    description: A hash representing the Cloud Controller whitelist.  key = domain, value = list of fully qualified CIDR ranges
+    example:
+      foo.gov:
+      - 192.0.2.0/24
+      - 198.51.100.101/32
+    default: {}

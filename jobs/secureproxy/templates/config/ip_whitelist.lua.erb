@@ -1,0 +1,20 @@
+local _M = {}
+
+local iputils = require "resty.iputils"
+local whitelist = {}
+local human_whitelist = {}
+
+<% p("secureproxy.whitelist", {}).each do | k, v | %>
+whitelist["<%= k %>"]=iputils.parse_cidrs({"<%= v.join('", "') %>"})
+human_whitelist["<%= k %>"]={"<%= v.join('", "') %>"}
+<% end %>
+
+function _M.get_whitelist()
+  return whitelist
+end
+
+function _M.get_human_whitelist()
+  return human_whitelist
+end
+
+return _M

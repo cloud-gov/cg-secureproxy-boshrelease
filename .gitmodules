@@ -1,0 +1,3 @@
+[submodule "src/lua-resty-iputils"]
+	path = src/lua-resty-iputils
+	url = https://github.com/hamishforbes/lua-resty-iputils

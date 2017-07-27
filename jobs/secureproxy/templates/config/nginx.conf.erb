@@ -1,8 +1,7 @@
-# deployment cloudcontroller nginx.conf
 user  vcap vcap;
 worker_processes  2;
 
-error_log /var/vcap/sys/log/secureproxy/nginx.error.log notice;
+error_log /var/vcap/sys/log/secureproxy/secureproxy.error.log notice;
 pid       /var/vcap/sys/run/secureproxy/secureproxy.pid;
 
 worker_rlimit_nofile 40000;
@@ -43,7 +42,6 @@ http {
             '$upstream_response_time $pipe';
 
   access_log /var/vcap/sys/log/secureproxy/access.log main;
-  error_log /var/vcap/sys/log/secureproxy/error.log;
 
   ##
   # Gzip
@@ -94,9 +92,83 @@ http {
     '' 'text/plain; charset=utf-8';
   }
 
+  lua_package_path "/var/vcap/packages/secureproxy/lualib/?.lua;/var/vcap/jobs/secureproxy/config/?.lua";
+
+  # in this shared dict we store cached info from /v2/info and keys for each hostname to filter
+  lua_shared_dict shm 32k;
+
+  init_by_lua_block {
+    cjson = require "cjson"
+    ngx_re = require "ngx.re"
+    iputils = require "resty.iputils"
+    local whitelist = require "ip_whitelist"
+
+    ip_whitelist = whitelist.get_whitelist()
+    ip_whitelist_size = 0
+
+    local info = ""
+    for k,v in pairs(whitelist.get_human_whitelist()) do
+      ip_whitelist_size = ip_whitelist_size + 1
+      info = info..k..":\n"
+
+      for kk, vv in ipairs(v) do
+        info = info.."- "..vv.."\n"
+      end
+    end
+
+    info =  "Loaded whitelist for "..ip_whitelist_size.." domains:\n"..info
+    ngx.log(ngx.NOTICE, info)
+    ngx.log(ngx.NOTICE, cjson.encode(ip_whitelist))
+  }
+
   server {
-    listen    <%= p("secureproxy.listen_port") %>;
+    listen <%= p("secureproxy.listen_port") %>;
+    set $local_proxy "http://127.0.0.1:<%= p("secureproxy.proxy_port") %>";
+
+    set_by_lua_block $cloud_controller {
+      -- set the key so we'll filter requests on this hostname below
+      local shm = ngx.shared.shm
+      shm:set("<%= p("secureproxy.cloud_controller") %>", true)
+
+      -- also return it, so the nginx var will be set
+      return "<%= p("secureproxy.cloud_controller") %>"
+    }
+
     server_name  _;
+
+    # make a request to api/v2/info via capture
+    location /__cfinfo {
+
+      proxy_method GET;
+      proxy_set_header Accept "application/json";
+      proxy_set_header Host $cloud_controller;
+
+      proxy_pass $local_proxy/v2/info;
+
+    }
+
+    # make a request to uaa/userinfo via capture
+    location /__userinfo {
+
+      set_by_lua_block $uaahostname {
+        local shm = ngx.shared.shm
+        return shm:get("_token_hostname")
+      }
+
+      proxy_method GET;
+      proxy_set_header Accept "application/json";
+      proxy_set_header Authorization $auth;
+      proxy_set_header Accept-Encoding "identity";
+      proxy_set_header Host $uaahostname;
+
+      # since we are piping this request directly through the local gorouter
+      # we need to make sure UAA thinks it's coming via https
+      proxy_set_header X-Forwarded-Proto "https";
+
+      proxy_pass $local_proxy/userinfo;
+
+    }
+
 
     # proxy all traffic
     location / {
@@ -116,6 +188,112 @@ http {
       add_header X-XSS-Protection $xss_protection always;
       add_header Content-Type $default_content_type always;
 
+      ##
+      # Implement per-domain IP Whitelist
+      ##
+
+      set $auth '';
+      access_by_lua_block {
+        -- bail fast if we don't have a whitelist, or it's not a hostname that needs filtering
+        if ip_whitelist_size == 0 then
+          return
+        end
+
+        -- strip any port off the hostheader
+        local hostname = ngx.req.get_headers()["Host"]
+        port = hostname:find(":")
+        if port ~= nil then
+          hostname = hostname:sub(1, port-1)
+        end
+
+        local shm = ngx.shared.shm
+
+        -- TODO: Do we need to put this in front of things other than CC (like doppler?)
+        if shm:get(hostname) == nil then
+            return
+        end
+
+        -- skip unauthenticated URLs
+        if hostname == ngx.var.cloud_controller and ngx.re.match(ngx.var.request_uri, "^/v2/info") then
+            return
+        end
+
+        -- if we don't know where uaa is at yet, ask the api server and cache the response
+        if shm:get("_token_hostname") == nil then
+          ngx.log(ngx.NOTICE, "Cache miss for _token_hostname. Requesting ", ngx.var.cloud_controller, "/v2/info")
+          local resp = ngx.location.capture("/__cfinfo")
+
+          -- stash the uaa endpoint with the protocol striped (suitable for a host header)
+          if resp.status == 200 then
+            local token_endpoint = cjson.decode(resp.body).token_endpoint
+            shm:set("_token_hostname", token_endpoint:sub(token_endpoint:find("://")+3))
+          else
+            ngx.status = resp.status
+            ngx.say(cjson.encode({description="Error communicating with Cloud Controller", error_code="SecureProxy-CCError", code=9160}))
+            return ngx.exit(resp.status)
+          end
+        end
+
+        -- call uaa userinfo endpoint to figure out who owns this token and let uaa validate it for us
+        local userinfo = ngx.location.capture("/__userinfo", {vars={auth=ngx.req.get_headers()["Authorization"]}})
+
+        -- if uaa failed on us, then fail the request
+        if userinfo.status ~= 200 then
+            ngx.log(ngx.ERR, "Bad response from UAA during IP Whitelist check ", hostname, " ", cjson.encode(userinfo))
+            ngx.status = userinfo.status
+            ngx.header.content_type = "application/json; charset=utf-8"
+
+            local code = 9161
+            -- If we respond with > 299, and code 1000 then the cf cli will give a nice error message about not being authed
+            -- https://github.com/cloudfoundry/cli/blob/ffee70cca68ab15df71f48641f6fa3bb007c4a2b/cf/net/cloud_controller_gateway.go#L19-L30
+            if userinfo.status == 401 then
+              code = 1000
+            end
+
+            ngx.say(cjson.encode({description="Unauthorized Request", error_code="SecureProxy-UAAError", code=code}))
+            return ngx.exit(userinfo.status)
+        end
+
+        -- decode the json and split the email address
+        local user = cjson.decode(userinfo.body)
+        local email, err = ngx_re.split(user.user_name, "@")
+
+        -- if the split failed, bail
+        -- TODO: What about deployer accounts?
+        if #email ~= 2 then
+            ngx.log(ngx.ERR,"Skipping whitelist check. Unable to extract domain from username", cjson.encode(email))
+            return
+        end
+
+        -- see if we have a whitelist registered for this domain
+        if ip_whitelist[email[2]] == nil then
+            return
+        end
+
+        -- where is the request coming from
+        local source_ip = ngx.var.remote_addr
+
+        -- if we have an X-Forwarded-For header then use the last one in the list instead of remote_addr
+        local xff = ngx.req.get_headers()["X-Forwarded-For"]
+        if xff ~= nil then
+            local xffl, err = ngx_re.split(xff, ", ")
+            if xffl ~= nil then
+                source_ip = xffl[#xffl]
+            end
+        end
+
+        ngx.log(ngx.NOTICE, "Checking ", source_ip, " against ", email[2], " whitelist for ", user.user_name)
+
+        -- fail if the request isn't coming from a whitelisted range
+        if not iputils.ip_in_cidrs(source_ip, ip_whitelist[email[2]]) then
+            ngx.status = ngx.HTTP_FORBIDDEN
+            ngx.header.content_type = "application/json; charset=utf-8"
+            -- TODO: Should we be more informative in our error message, should we use a stock cloud controller error code
+            ngx.say(cjson.encode({description="Authorization Error", error_code="SecureProxy-NotAuthorized", code=9162}))
+            return ngx.exit(ngx.HTTP_FORBIDDEN)
+        end
+      }
+
       fastcgi_param               HTTP_PROXY "";
 
       proxy_buffering             off;
@@ -128,7 +306,7 @@ http {
       proxy_pass_request_headers  on;
       proxy_connect_timeout       10;
       proxy_read_timeout          600;
-      proxy_pass                  http://localhost:<%= p("secureproxy.proxy_port") %>;
+      proxy_pass                  $local_proxy;
 
     }
 

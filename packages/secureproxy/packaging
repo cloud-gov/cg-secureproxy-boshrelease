@@ -9,9 +9,14 @@ OPENRESTY_TARGET=$(mktemp -d)
 tar xzvf openresty-1* -C ${OPENRESTY_TARGET}
 
 echo "Building nginx..."
-cd ${OPENRESTY_TARGET}/openresty*
+pushd ${OPENRESTY_TARGET}/openresty*
   ./configure \
     --prefix=${BOSH_INSTALL_TARGET} \
     --with-pcre=${PCRE_TARGET}/pcre*
   make
   make install
+popd
+
+echo "Adding resty.iputils"
+# TODO: PR OPM to support installing modules from local sources
+cp lua-resty-iputils/lib/resty/iputils.lua ${BOSH_INSTALL_TARGET}/lualib/resty/
