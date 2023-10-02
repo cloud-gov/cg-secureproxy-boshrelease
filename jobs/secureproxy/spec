@@ -22,6 +22,9 @@ properties:
     description: HTTP proxy to this port
   secureproxy.https_proxy_port:
     description: HTTPS proxy to this port
+  secureproxy.max_connections:
+    description: Set the maximum number of connections in the nginx config file
+    default: 16384
 
 
   secureproxy.tls_cert:

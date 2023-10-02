@@ -7,7 +7,7 @@ pid       /var/vcap/sys/run/secureproxy/secureproxy.pid;
 worker_rlimit_nofile 40000;
 
 events {
-  worker_connections  8096;
+  worker_connections  <%= p("secureproxy.max_connections") %>;
   multi_accept        on;
   use                 epoll;
 }
